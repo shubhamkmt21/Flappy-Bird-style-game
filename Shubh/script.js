@@ -6,9 +6,12 @@
   const ctx = canvas.getContext('2d');
 
   const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
   const overlayEl = document.getElementById('overlay');
   const finalScoreEl = document.getElementById('finalScore');
   const restartBtn = document.getElementById('restartBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const resetBtn = document.getElementById('resetBtn');
 
   /** Game constants */
   const WIDTH = canvas.width;
@@ -22,24 +25,92 @@
   const PIPE_INTERVAL_MS = 1400; // spawn cadence
   const PIPE_SPEED = 2.6; // px/frame
 
-  const GROUND_THICKNESS = 0; // visual ground not drawn; we use canvas bounds
+  const MOVE_SPEED = 4.0; // bird pixels per frame on key hold
 
   /** Game state */
-  let isRunning = false;
+  let isRunning = false; // gameplay active (not game over)
+  let isPaused = false;  // paused state
   let frameId = 0;
   let lastSpawnAt = 0;
-  let mouseY = HEIGHT / 2;
 
-  /** Bird state follows mouse with easing */
+  /** Bird state controlled by arrows */
   const bird = {
     x: BIRD_X,
     y: HEIGHT / 2,
   };
 
-  /** Pipes: array of { x, topHeight, gapStartY } */
+  /** Pipes: array of { x, gapCenter, passed } */
   const pipes = [];
 
   let score = 0;
+  let best = 0;
+
+  // Load best score from localStorage
+  try {
+    const saved = localStorage.getItem('flappy_best');
+    if (saved) best = Number(saved) || 0;
+  } catch (_) {}
+  bestEl && (bestEl.textContent = String(best));
+
+  // Input handling (ArrowUp / ArrowDown)
+  let directionY = 0; // -1 up, +1 down, 0 idle
+
+  function onKeyDown(e) {
+    if (e.key === 'ArrowUp' || e.key === 'Up') {
+      e.preventDefault();
+      directionY = -1;
+    } else if (e.key === 'ArrowDown' || e.key === 'Down') {
+      e.preventDefault();
+      directionY = +1;
+    } else if (e.key === 'p' || e.key === 'P') {
+      e.preventDefault();
+      togglePause();
+    } else if (e.key === 'r' || e.key === 'R') {
+      e.preventDefault();
+      resetGame();
+    }
+  }
+
+  function onKeyUp(e) {
+    if (e.key === 'ArrowUp' || e.key === 'Up') {
+      e.preventDefault();
+      if (directionY === -1) directionY = 0;
+    } else if (e.key === 'ArrowDown' || e.key === 'Down') {
+      e.preventDefault();
+      if (directionY === +1) directionY = 0;
+    }
+  }
+
+  window.addEventListener('keydown', onKeyDown, { passive: false });
+  window.addEventListener('keyup', onKeyUp, { passive: false });
+
+  // Buttons
+  pauseBtn?.addEventListener('click', () => togglePause());
+  resetBtn?.addEventListener('click', () => resetGame());
+  restartBtn.addEventListener('click', () => {
+    resetGame();
+  });
+
+  function setPauseUI() {
+    if (!pauseBtn) return;
+    pauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
+    pauseBtn.setAttribute('aria-pressed', String(isPaused));
+  }
+
+  function togglePause() {
+    if (!isRunning) return; // cannot pause on game over
+    isPaused = !isPaused;
+    setPauseUI();
+    if (!isPaused) {
+      // resume loop immediately
+      cancelAnimationFrame(frameId);
+      frameId = requestAnimationFrame(loop);
+    }
+  }
+
+  function clamp(val, min, max) {
+    return Math.max(min, Math.min(max, val));
+  }
 
   function randBetween(min, max) {
     return Math.random() * (max - min) + min;
@@ -47,37 +118,39 @@
 
   function resetGame() {
     isRunning = true;
+    isPaused = false;
+    setPauseUI();
+
     pipes.length = 0;
     score = 0;
     scoreEl.textContent = '0';
     lastSpawnAt = performance.now();
-    mouseY = HEIGHT / 2;
     bird.y = HEIGHT / 2;
+    directionY = 0;
     overlayEl.hidden = true;
+
+    cancelAnimationFrame(frameId);
+    frameId = requestAnimationFrame(loop);
   }
 
   function endGame() {
     isRunning = false;
+    isPaused = false;
+    setPauseUI();
+
+    // update best
+    if (score > best) {
+      best = score;
+      try { localStorage.setItem('flappy_best', String(best)); } catch (_) {}
+      bestEl && (bestEl.textContent = String(best));
+    }
+
     finalScoreEl.textContent = String(score);
     overlayEl.hidden = false;
   }
 
-  // Mouse tracking: set desired vertical position to cursor Y inside canvas bounds
-  function handleMouseMove(e) {
-    const rect = canvas.getBoundingClientRect();
-    const y = e.clientY - rect.top;
-    mouseY = Math.max(BIRD_RADIUS, Math.min(HEIGHT - BIRD_RADIUS, y));
-  }
-
-  canvas.addEventListener('mousemove', handleMouseMove);
-
-  restartBtn.addEventListener('click', () => {
-    resetGame();
-  });
-
   // Pipe helpers
   function spawnPipe(nowTs) {
-    // Choose a gap center with margins so the whole gap stays in-bounds
     const margin = 30;
     const gapCenter = randBetween(margin + PIPE_GAP / 2, HEIGHT - margin - PIPE_GAP / 2);
 
@@ -95,32 +168,38 @@
       pipes[i].x -= PIPE_SPEED;
     }
 
-    // Remove offscreen pipes
     while (pipes.length && pipes[0].x + PIPE_WIDTH < 0) {
       pipes.shift();
     }
   }
 
   function drawBackground() {
-    // Sky already set by CSS background, but we clear canvas for crisp draw
     ctx.clearRect(0, 0, WIDTH, HEIGHT);
 
-    // Optional ground/top lines for collision cues
-    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+    // Border lines (professional framing)
+    ctx.strokeStyle = 'rgba(16,42,67,0.45)';
     ctx.lineWidth = 2;
+    ctx.strokeRect(1, 1, WIDTH - 2, HEIGHT - 2);
+
+    // Subtle top/bottom helpers
+    ctx.strokeStyle = 'rgba(16,42,67,0.12)';
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(0, 1);
-    ctx.lineTo(WIDTH, 1);
-    ctx.moveTo(0, HEIGHT - 1 - GROUND_THICKNESS);
-    ctx.lineTo(WIDTH, HEIGHT - 1 - GROUND_THICKNESS);
+    ctx.moveTo(0, 60);
+    ctx.lineTo(WIDTH, 60);
+    ctx.moveTo(0, HEIGHT - 60);
+    ctx.lineTo(WIDTH, HEIGHT - 60);
     ctx.stroke();
   }
 
-  function drawBird() {
-    // ease bird y towards mouseY
-    const easing = 0.25; // higher = snappier
-    bird.y += (mouseY - bird.y) * easing;
+  function updateBird() {
+    if (directionY !== 0) {
+      bird.y += MOVE_SPEED * directionY;
+      bird.y = clamp(bird.y, BIRD_RADIUS, HEIGHT - BIRD_RADIUS);
+    }
+  }
 
+  function drawBird() {
     // Body
     ctx.fillStyle = '#FFDC00';
     ctx.beginPath();
@@ -158,22 +237,19 @@
       // Bottom pipe
       ctx.fillRect(p.x, gapBottom, PIPE_WIDTH, HEIGHT - gapBottom);
 
-      // Scoring: when bird center passes pipe's right edge
       if (!p.passed && bird.x > p.x + PIPE_WIDTH) {
         p.passed = true;
         score += 1;
         scoreEl.textContent = String(score);
       }
 
-      // Collision check: circle-rect collision for both top and bottom parts
-      // Check horizontal overlap first
+      // Collision check
       const birdLeft = bird.x - BIRD_RADIUS;
       const birdRight = bird.x + BIRD_RADIUS;
       const pipeLeft = p.x;
       const pipeRight = p.x + PIPE_WIDTH;
 
       if (birdRight > pipeLeft && birdLeft < pipeRight) {
-        // If bird y is not within gap range, it's a collision
         if (bird.y - BIRD_RADIUS < gapTop || bird.y + BIRD_RADIUS > gapBottom) {
           collided = true;
         }
@@ -191,8 +267,14 @@
   }
 
   function loop(nowTs) {
-    if (!isRunning) {
-      return; // stop drawing while in overlay
+    if (!isRunning) return;
+    if (isPaused) {
+      // When paused, draw frame without updating world
+      drawBackground();
+      drawPipesAndDetectCollision(); // draws pipes only; early return prevents endGame triggers
+      drawBird();
+      frameId = requestAnimationFrame(loop);
+      return;
     }
 
     // Spawn pipes at interval
@@ -201,6 +283,7 @@
     }
 
     updatePipes();
+    updateBird();
 
     drawBackground();
     drawPipesAndDetectCollision();
@@ -209,14 +292,11 @@
     frameId = requestAnimationFrame(loop);
   }
 
-  // Start game on first interaction so mouse has a meaningful position
   function start() {
     if (isRunning) return;
     resetGame();
-    cancelAnimationFrame(frameId);
-    frameId = requestAnimationFrame(loop);
   }
 
-  // Start immediately; user can move mouse to control
+  // Kick off
   start();
 })();
