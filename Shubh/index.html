@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flappy Cursor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="game-root">
+    <canvas id="game" width="400" height="600" aria-label="Flappy Cursor game area"></canvas>
+
+    <div id="ui">
+      <div id="score" aria-live="polite">0</div>
+    </div>
+
+    <div id="overlay" hidden>
+      <div class="overlay-card">
+        <h1>Game Over</h1>
+        <p>Score: <span id="finalScore">0</span></p>
+        <button id="restartBtn" type="button">Restart</button>
+        <p class="hint">Move your mouse up/down to guide the bird</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
